@@ -1,250 +1,184 @@
-# SECOM 반도체 불량 예측 및 VM-FDC 가이던스 에이전트
+# UCI SECOM 비용 민감 불량 스크리닝 & XAI 가이던스 PoC
 
-> UCI SECOM 센서 데이터를 활용해 웨이퍼 불량을 사전 예측하고, 비용 기준에 따라 선별검사 의사결정을 지원하는 ML 파이프라인과 XAI/LLM 기반 진단 에이전트를 구현한 개인 포트폴리오 프로젝트입니다.
+> 공개 반도체 센서 데이터를 활용해 **데이터 누수 없는 모델 검증**, **운영 비용을 반영한 판단 기준 선정**, **엔지니어가 확인할 수 있는 예측 근거 제공**까지 구현한 개인 프로젝트입니다.
 
-![Python](https://img.shields.io/badge/Python-3.10+-blue)
-![scikit-learn](https://img.shields.io/badge/scikit--learn-ML-orange)
-![XGBoost](https://img.shields.io/badge/XGBoost-Model-green)
-![SHAP](https://img.shields.io/badge/SHAP-XAI-purple)
-![OpenAI](https://img.shields.io/badge/GPT--4o--mini-LLM%20Report-lightgrey)
+[![Python](https://img.shields.io/badge/Python-3.10+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![scikit-learn](https://img.shields.io/badge/scikit--learn-Modeling-F7931E?logo=scikitlearn&logoColor=white)](https://scikit-learn.org/)
+[![SHAP](https://img.shields.io/badge/XAI-SHAP-7B61FF)](https://shap.readthedocs.io/)
+[![Dataset](https://img.shields.io/badge/Data-UCI%20SECOM-555555)](https://archive.ics.uci.edu/dataset/179/secom)
 
----
+## 1. 프로젝트 개요
 
-## 1. 문제 정의 및 배경
+반도체 공정은 불량을 놓치지 않는 것이 중요하지만, 모든 샘플을 검사하면 검사량과 운영 비용이 증가합니다. 이 프로젝트는 UCI SECOM 데이터로 다음 질문을 검토했습니다.
 
-최첨단 반도체 소자 구현을 위해 Etch 공정의 복잡도와 난이도가 급격히 증가함에 따라, 미세한 공정 변동이 수율에 직간접적인 타격을 주는 리스크가 커지고 있습니다. 특히 대용량의 FDC(Fault Detection and Classification) 및 센서 데이터가 쏟아지는 환경에서, 반복적이고 복잡한 엔지니어링 리소스를 줄이고 데이터 기반의 선제적 대응 체계를 구축하는 것은 제조기술의 안정성과 원가 절감을 위한 핵심 과제입니다.
+1. 불균형 데이터에서 불량 검출 성능을 신뢰할 수 있게 평가하려면 어떻게 해야 하는가?
+2. 미검출 비용과 검사량을 함께 고려해 배포 판단 기준을 어떻게 정할 것인가?
+3. 모델의 예측 결과를 엔지니어가 검토 가능한 근거와 확인 항목으로 어떻게 연결할 것인가?
 
-반도체 양산 라인에서는 모든 웨이퍼를 정밀 검사(VM, Virtual Metrology)하기엔 비용·시간적 부담이 크고, 그렇다고 검사를 생략하면 불량이 후속 공정으로 전이되어 막대한 비용 손실(Scrap)이 발생합니다.
+### 구현 범위
 
-이 프로젝트는 현업의 이러한 Pain Point를 해결하기 위해 다음 두 가지 핵심 질문에서 출발했습니다.
+- 5×5 Repeated Nested CV 기반의 leakage-free 검증
+- None·SMOTE·GMM+PCA 증강 기법 비교 및 통계 검정
+- Inner OOF 결과를 이용한 Cost Ratio와 Threshold 자동 선정
+- Global·Local SHAP 기반 예측 근거 설명
+- Risk Screening → XAI Guidance → Engineer Check 형태의 오프라인 Agent PoC
 
-대용량의 Etch 공정 데이터(FDC 등)를 심층 분석하여, 불량 발생을 선제적으로 감지하는 고도화된 예측 모델을 개발할 수 있는가?
+### 이 프로젝트가 주장하지 않는 것
 
-단순한 예측을 넘어, 엔지니어의 의사결정을 돕고 공정 제어 및 진단을 자동화하는 'AI Agent 시스템'을 구현할 수 있는가?
+- 실제 SK하이닉스 또는 Etch 공정 데이터를 사용한 프로젝트가 아닙니다.
+- 실제 FDC 시스템이나 Virtual Metrology 모델을 구현한 것이 아닙니다.
+- MES·설비 API 연동, Recipe 변경, Interlock 실행 등 생산 제어 기능은 포함하지 않습니다.
+- LLM은 계산된 결과를 요약할 뿐, 검사 여부를 판단하거나 설비를 제어하지 않습니다.
 
-본 프로젝트는 단순히 모델 성능 지표(Accuracy, AUC)를 올리는 연구용 모델에 그치지 않습니다. 불균형 데이터 처리 시 발생할 수 있는 인공적 신호(Artifact)를 철저히 검증하고, 실제 제조 현장의 비용 구조를 고려한 선별검사 의사결정 파이프라인과 LLM/XAI 기반의 VM-FDC 가이던스 에이전트를 구축하여 현업 적용이 가능한 수준의 원가 절감 솔루션을 제안하고자 했습니다.
+## 2. 핵심 결과
 
----
+운영 조건을 **Recall ≥ 65%, 검사 대상 감소 ≥ 55%**로 정의하고, Inner OOF에서 조건을 만족하는 최소 Cost Ratio를 선택했습니다.
 
-## 2. 데이터셋
+| 구분 | 결과 |
+|---|---:|
+| 선택된 증강 기법 | SMOTE |
+| 배포 Operating Point | FN:FP = **13:1** |
+| 대표 Inner OOF Threshold | **0.00571** |
+| Outer Test Recall | **68.7%** |
+| Outer Test Precision | **11.7%** |
+| Outer Test AUC | **0.719** |
+| 검사 대상 감소 | **60.1%** |
 
-[UCI SECOM Dataset](https://archive.ics.uci.edu/dataset/179/secom)
+> 성능 수치는 25개 Outer Test fold의 평균입니다. 모델과 Threshold는 각 Outer Train 내부 OOF 결과만으로 선택했으며, Outer Test는 최종 평가에만 사용했습니다. `0.00571`은 fold별 선정값을 설명하기 위한 대표값으로, 모든 데이터에 고정 적용하는 범용 Threshold가 아닙니다.
 
-| 항목 | 내용 |
+## 3. 데이터와 문제 정의
+
+- **데이터:** [UCI SECOM](https://archive.ics.uci.edu/dataset/179/secom)
+- **규모:** 1,567개 공정 샘플, 590개 익명 센서 변수
+- **목표:** 정상/불량 이진 분류 및 검사 대상 선별
+- **특성:** 결측치, 고차원 센서 변수, 심한 클래스 불균형
+
+전처리 과정에서는 결측률이 높은 변수와 분산이 없는 변수를 제거하고, 학습 fold 내부에서만 결측치 대치·스케일링·Feature Selection·증강을 수행했습니다.
+
+## 4. Leakage-free 검증 설계
+
+```text
+Outer Train
+  └─ Inner 5-Fold CV
+       ├─ 전처리·Feature Selection
+       ├─ 증강 및 모델 학습
+       ├─ Inner OOF 예측 생성
+       └─ 모델·Cost Ratio·Threshold 선정
+
+Outer Test
+  └─ Outer Train에서 확정한 모델과 Threshold로 최종 평가
+```
+
+위 과정을 5개 fold × 5개 seed로 반복해 총 25개의 독립적인 Outer Test 결과를 얻었습니다. Feature Selection, SMOTE, 모델 학습, Threshold 탐색은 모두 Outer Train 안에서 수행해 평가 데이터가 선택 과정에 섞이지 않도록 했습니다.
+
+## 5. 증강 기법 비교
+
+먼저 동일한 데이터 분할과 seed를 사용하고, Cost Ratio를 15:1로 고정한 상태에서 세 가지 방법을 비교했습니다.
+
+| 방법 | Recall | Precision | AUC | 검사 대상 감소 |
+|---|---:|---:|---:|---:|
+| None | 69.8% | 12.3% | 0.723 | 61.3% |
+| GMM + PCA | 62.7% | 13.1% | 0.732 | 67.4% |
+| **SMOTE** | **71.1%** | 11.6% | 0.721 | 58.4% |
+
+Wilcoxon signed-rank test 결과, GMM+PCA는 Recall이 열위여서 제외했습니다. None과 SMOTE의 차이는 통계적으로 유의하지 않았지만, 미검출 최소화라는 목적에 따라 평균 Recall이 가장 높은 SMOTE를 후속 실험에 사용했습니다.
+
+> 이 표는 **증강 기법 비교를 위한 고정 15:1 결과**입니다. 위의 최종 성능은 자동 선정된 **13:1 Operating Point**를 Outer Test에서 평가한 결과이므로 두 수치를 구분해야 합니다.
+
+## 6. Operating Point 자동 선정
+
+단순히 0.5 Threshold를 사용하는 대신, 불량 미검출과 추가 검사의 상대 비용을 반영했습니다.
+
+```text
+Total Cost = Cost Ratio × FN + 1 × FP
+```
+
+선정 절차는 다음과 같습니다.
+
+1. 각 Outer Train의 Inner OOF 예측으로 Cost Ratio 후보별 Threshold를 탐색합니다.
+2. Recall ≥ 65%, 검사 대상 감소 ≥ 55%를 만족하는지 확인합니다.
+3. 조건을 만족하는 **최소 Cost Ratio**를 선택합니다.
+4. 선택된 Ratio에서 Total Cost가 가장 낮은 Threshold를 확정합니다.
+5. 확정된 모델과 Threshold를 해당 Outer Test에 한 번만 적용합니다.
+
+그 결과 배포 후보 Operating Point는 **13:1**, 대표 Threshold는 **0.00571**로 선정됐습니다.
+
+## 7. XAI 기반 엔지니어 의사결정 지원
+
+Agent는 모델의 판단을 대신하는 자동 제어기가 아니라, 예측 결과를 엔지니어가 검토할 수 있는 형태로 정리하는 오프라인 의사결정 지원 PoC입니다.
+
+```text
+Risk Screening
+  → Threshold Rule로 검사 대상 선별
+  → Global·Local SHAP으로 주요 센서 근거 확인
+  → 동일 설비·시간대 데이터 비교 등 확인 항목 제시
+  → LLM이 검증 결과를 현장 문장으로 요약
+  → 엔지니어가 최종 확인 및 조치 판단
+```
+
+### 역할 구분
+
+| 구성 요소 | 역할 |
 |---|---|
-| 샘플 수 | 1,567개 (웨이퍼 단위) |
-| 센서(피처) 수 | 590개 → 전처리 후 약 440개 |
-| 불량 비율 | 6.6% (심한 클래스 불균형) |
-| 라벨 | Pass(정상) / Fail(불량) |
+| Model | 불량 Risk Score 산출 |
+| Rule | Threshold에 따라 PASS/INSPECT 후보 분류 |
+| SHAP | 전체 모델 경향과 개별 샘플의 판단 근거 설명 |
+| LLM | 계산·검증된 결과만 자연어로 요약 |
+| Engineer | 센서 이상 여부 확인 및 최종 조치 결정 |
 
-전처리 단계에서 결측치 50% 이상 컬럼과 상수 컬럼을 제거했습니다.
+## 8. 주요 발견
 
----
+### 데이터 누수 방지
 
-## 3. 분석 파이프라인
+전처리와 증강을 전체 데이터에 먼저 적용하면 검증 성능이 과대평가될 수 있습니다. 모든 학습 절차를 CV fold 내부로 제한하고, Inner OOF와 Outer Test의 역할을 분리했습니다.
 
-```
-전처리 (결측치/상수 컬럼 제거)
-   ↓
-Feature Selection (SelectKBest, 440 → 100개)
-   ↓
-데이터 증강 비교 (None vs SMOTE vs GMM+PCA)
-   ↓
-Cost-sensitive Threshold 최적화
-   ↓
-통계적 검증 (5×5 Repeated Nested CV + Wilcoxon Test)
-   ↓
-SHAP 기반 원인 진단 + Artifact 필터링
-   ↓
-LLM(GPT-4o-mini) 자연어 리포트
-```
+### GMM+PCA artifact 확인
 
-모든 전처리/증강/Feature Selection은 **train fold 내부에서만 fit**하여 data leakage를 방지하는 구조로 설계했습니다.
+GMM+PCA 합성 샘플에서 일부 실제 데이터 범위를 벗어난 값이 관찰됐습니다. 단순 성능 비교에 그치지 않고 합성 데이터의 분포를 확인했으며, Recall 열위와 함께 현장 해석 위험을 고려해 제외했습니다.
 
----
+### 예측과 조치의 분리
 
-## 4. 핵심 발견: 가설 → 검증 → 결론
+익명화된 공개 데이터만으로 실제 Recipe 처방을 제안하는 것은 적절하지 않습니다. 따라서 Agent는 예측·설명·확인 항목까지만 제공하고, 실제 조치는 공정 지식을 가진 엔지니어가 결정하도록 역할을 분리했습니다.
 
-이 프로젝트에서 가장 비중 있게 다룬 부분은 "정교한 기법이 항상 더 좋은 결과를 보장하는가"를 직접 검증한 과정입니다.
+## 9. 실행 방법
 
-### 4-1. Data Leakage 발견 및 수정
-
-초기 버전에서는 cost-sensitive threshold를 **test fold의 정답값**으로 탐색하고 있었습니다. 이로 인해 성능이 낙관적으로 추정되는 leakage가 발생했습니다(검사량감소 91.8%, Recall 25.0%처럼 비현실적인 결과가 나옴).
-
-→ Threshold 탐색을 **train fold 내부 OOF(Out-of-Fold) 확률**로만 수행하도록 수정하여 leakage를 제거했습니다.
-
-### 4-2. GMM+PCA 증강이 만든 Artifact 발견
-
-스케일링 없이 PCA를 적용한 GMM+PCA 증강 버전에서, 특정 센서(`sensor_67`)가 Feature Importance **1위(0.220)**를 차지했고, 2위와 importance 격차가 약 8배에 달했습니다.
-
-**가설**: PCA가 측정 단위/분산이 큰 센서에 의해 왜곡되었을 것이다.
-
-**검증**: PCA 적용 전 RobustScaler를 추가한 결과, `sensor_67`의 순위가 1위 → 9위로 완화되었습니다.
-
-**추가 검증**: 그러나 random seed를 10회 바꿔 반복한 결과, 평균 6.0위(표준편차 2.4)로 **일관되게 상위권**을 유지했습니다. 분포를 확인한 결과 Skewness 20.77로 극단적으로 치우친 분포였습니다.
-
-**결론**: 스케일링으로 왜곡을 완화했지만 완전히 해소되지 않은 **구조적 잔존 artifact**로 최종 판정하고 분석 대상에서 제외했습니다.
-
-<p align="center">
-<img width="900" alt="PCA_scaling" src="https://github.com/user-attachments/assets/90b38a80-6617-4877-bcb7-0003d759f5ab" />
-</p>
-
-
-### 4-3. 더 근본적인 원인 — 표본 부족과 차원의 문제
-
-`sensor_67`을 제거한 뒤에도 같은 방식(440차원 전체로 GMM+PCA 적용)에서 `sensor_74`가 importance 1위(0.360)로 새롭게 부각되는 현상을 확인했습니다. 분포를 보니 Skewness 39.5로 더욱 극단적이었습니다.
-
-**검증**: Feature Selection(SelectKBest)을 GMM+PCA보다 먼저 적용한 결과, `sensor_74`는 10회 반복 모두 selection 단계에서 통계적으로 유의하지 않다는 이유로 자동 제외되었습니다.
-
-**결론**: 소수클래스 표본(약 100개)으로 440차원의 분포를 추정하는 것 자체가 통계적으로 불안정하며, **Feature Selection을 GMM+PCA보다 먼저 적용**해야 이런 종류의 artifact를 줄일 수 있다는 것을 확인했습니다.
-
-### 4-4. 증강 기법 간 통계적 성능 비교
-
-위 발견이 실제 모델 성능에도 영향을 주는지, **5×5 Repeated Nested CV**(outer 5-fold × 5회 반복 = 25개 성능 점수)로 None / SMOTE / GMM+PCA를 비교했습니다.
-
-| 증강 기법 | Recall | Precision | AUC | 검사량감소 |
-|---|---|---|---|---|
-| None | 0.698 ± 0.110 | 0.123 ± 0.017 | 0.723 ± 0.038 | 61.3% ± 8.5% |
-| SMOTE | **0.711 ± 0.156** | 0.116 ± 0.018 | 0.721 ± 0.044 | 58.4% ± 10.5% |
-| GMM+PCA | 0.627 ± 0.130 | 0.131 ± 0.023 | 0.732 ± 0.045 | 67.4% ± 7.7% |
-
-**Wilcoxon signed-rank test 결과 (p < 0.05 기준):**
-
-- Recall: GMM+PCA가 None, SMOTE 대비 **통계적으로 유의하게 낮음** (p=0.048, p=0.008)
-- Precision: GMM+PCA가 SMOTE 대비 유의하게 높음 (p=0.0066)
-- AUC: 세 기법 간 유의한 차이 없음 (모두 p > 0.05)
-- None vs SMOTE: 모든 지표에서 유의한 차이 없음
-
-**결론**: GMM+PCA는 모델의 근본적 판별력(AUC)을 개선하지 못했고, VM 스크리닝의 핵심 지표인 Recall에서는 오히려 통계적으로 더 낮은 성능을 보였습니다. 이는 4-2~4-3에서 발견한 구조적 불안정성이 실제 일반화 성능 저하로 이어진다는 것을 뒷받침합니다. **"더 정교한 증강 기법이 항상 더 나은 결과를 보장하지 않는다"**는 것을 통계적으로 확인하고, 최종적으로 SMOTE 기반 파이프라인을 채택했습니다.
-
-### 증강 기법별 성능 분포 (5×5 Repeated Nested CV, 25회)
-
-<img width="1589" height="495" alt="Augmentation Method Comparision2_REV1" src="https://github.com/user-attachments/assets/c8627817-ed3a-4736-aa67-f3cc0f99768c" />
-
-GMM+PCA의 Recall 분포가 다른 두 기법보다 낮고 더 넓게 퍼져 있어, 통계 검정 결과(Wilcoxon p<0.05)와 일치하는 시각적 근거를 보여줍니다.
-
-
----
-
-## 5. Cost-sensitive Threshold 최적화
-
-불량을 놓치는 비용(FN)이 헛검사 비용(FP)보다 몇 배 더 큰지를 의미하는 **Cost Ratio**를 파라미터화하고, 이를 최소화하는 threshold를 train fold OOF 확률로 탐색하는 알고리즘을 직접 구현했습니다.
-
-Cost Ratio를 5~500까지 바꿔가며 시뮬레이션한 결과:
-
-- Cost Ratio가 100 이상으로 올라가면 Recall이 **0.981에서 정체**되어 더 이상 오르지 않습니다.
-- 이는 현재 센서 정보만으로는 약 1.9%의 불량이 구조적으로 예측 불가능한 한계로 해석됩니다.
-
-최종 채택 기준인 **Cost Ratio 15:1**(SMOTE 기준)에서 **Recall 71.1%, 검사량감소 58.4%**를 달성했습니다.
-
-### Cost Ratio별 Trade-off
-
-<p align="center">
-<img width="650" alt="VM Screening Trade-off_REV1" src="https://github.com/user-attachments/assets/f0099d9b-2f4e-4f32-bb31-14a133ad191f" />
-</p>
-
-
-위 그래프에서 보듯, Cost Ratio가 100 이상으로 올라가면 Recall이 0.981에서 정체되어 더 이상 오르지 않습니다. 이는 현재 보유한 센서 정보만으로는 예측이 불가능한 불량 유형이 일부 존재함을 시사합니다.
-
-> ⚠️ Cost Ratio 15:1은 임의로 가정한 값입니다. 실제 현장에 적용하려면 공정 단계별 실측 비용(검사 비용, 불량 유출 손실)으로 보정이 필요합니다. 본 프로젝트는 이 비율을 고정값이 아닌 **조정 가능한 파라미터**로 설계하여, 비용 데이터가 주어지면 그에 맞는 최적 threshold를 자동으로 찾는 프레임워크를 제공하는 데 초점을 맞췄습니다.
-
----
-
-## 6. XAI 및 LLM 가이던스 에이전트
-
-`EtchProcessAgent` 클래스를 3단계로 구성했습니다.
-
-| Stage | 역할 | 의사결정 주체 |
-|---|---|---|
-| 1. VM 스크리닝 | threshold 기준으로 INSPECT/PASS 판정 | 모델 확률 + threshold |
-| 2. XAI 가이던스 | SHAP으로 원인 센서 추출, artifact 센서(`sensor_67` 등) 자동 필터링 | SHAP + 화이트리스트 |
-| 3. Action Control | 위험도에 따라 Interlock/Recipe 점검 등 조치 결정 | 룰 기반 로직 |
-
-GPT-4o-mini는 위 단계에서 산출된 결과(원인 센서, 위험도, 권고조치)를 **현장 엔지니어가 읽기 좋은 자연어 리포트로 변환**하는 역할만 수행합니다. 실제 판정/조치 결정은 SHAP과 룰 기반 로직이 담당하며, LLM에 의사결정을 위임하지 않는 구조로 설계했습니다.
-
-### 실행 예시
-
-위험 웨이퍼가 감지되면 다음과 같은 흐름으로 가이던스가 생성됩니다 (실제 실행 로그).
-
-```
-[⚠️ 위험 감지] Wafer 2008-09-08 09:16:00 불량 확률: 0.5169 (기준 0.0097, Cost Ratio 15:1) -> 정밀 VM 대상 선별
-
-[🤖 Agent 가이던스 리포트] Wafer 2008-09-08 09:16:00
- - 주요 유발 인자(위험 증가 기준): sensor_15
- - 추천 액션: sensor_15 관련 Recipe 파라미터 및 Chamber 상태 점검
-
-[LLM 상세 리포트]
-1. 종합 판단: 샘플 ID 2008-09-08 09:16:00의 불량 확률이 높으며, 점검 대상 센서가 위험 증가 방향으로 선정되었습니다.
-2. 핵심 원인 추정 센서 및 해석: 점검 대상 센서인 sensor_15는 위험 증가 방향으로 기여하고 있으며, 기여도가 0.785로
-   나타났습니다. 이는 해당 센서의 측정값이 불량 확률에 긍정적인 영향을 미치고 있음을 의미합니다.
-3. 권고 조치: sensor_15의 측정값을 면밀히 검토하고, 필요시 보정 또는 교체를 고려해야 합니다.
-
-[🔧 Interlock/Recipe 시스템 모킹] action_type=RECIPE_ADJUSTMENT_SUGGESTION, signal=RECIPE_REVIEW_REQUEST
-  → 불량 확률 51.7% - 중위험. sensor_15 관련 Recipe 파라미터 점검 권장 (예: 해당 공정 Step의 가스 유량/RF Power ±5% 조정 검토).
+```bash
+git clone https://github.com/heejaelee712/secom-vmfdc-agent.git
+cd secom-vmfdc-agent
+jupyter notebook main_pipeline.ipynb
 ```
 
-이 출력에서 확인할 수 있듯, **LLM은 SHAP이 이미 산출한 원인 센서와 룰 기반 로직이 결정한 조치를 자연어로 풀어 설명할 뿐, 위험 여부나 조치 자체를 직접 판단하지 않습니다.** 또한 위험 증가 방향 센서가 없는 경우(`sensor_24`처럼 위험을 오히려 낮추는 방향)에는 그 사실을 숨기지 않고 그대로 보고하도록 설계했습니다.
+주요 라이브러리:
 
-### Agent 데모 결과 (Held-out 31건)
+```text
+numpy, pandas, scipy, scikit-learn, imbalanced-learn,
+matplotlib, seaborn, shap, openai
+```
 
-Cost Ratio 15:1 기준, 불량 21건 전체 + 정상 10건을 함께 시연한 결과입니다.
+OpenAI API Key는 LLM 요약 예시를 실행할 때만 필요합니다. 모델 학습·검증·SHAP 분석은 API Key 없이 실행할 수 있습니다.
 
-| wafer_id | fail_prob | routing | top_sensor | action_type | true_label |
-|---|---|---|---|---|---|
-| 2008-06-08 05:40 | 0.0315 | INSPECT | sensor_15 | RECIPE_ADJUSTMENT_SUGGESTION | Fail |
-| 2008-09-08 09:16 | 0.5169 | INSPECT | sensor_15 | RECIPE_ADJUSTMENT_SUGGESTION | Fail |
-| 2008-10-08 07:01 | 0.1154 | INSPECT | sensor_15 | RECIPE_ADJUSTMENT_SUGGESTION | Fail |
-| 2008-08-17 22:03 | 0.0420 | INSPECT | sensor_15 | RECIPE_ADJUSTMENT_SUGGESTION | Fail |
-| 2008-08-18 19:54 | 0.0607 | INSPECT | sensor_15 | RECIPE_ADJUSTMENT_SUGGESTION | Fail |
-| 2008-08-19 05:56 | 0.0142 | INSPECT | sensor_16 | RECIPE_ADJUSTMENT_SUGGESTION | Fail |
-| 2008-01-09 19:54 | 0.0731 | INSPECT | sensor_24 (대체) | RECIPE_ADJUSTMENT_SUGGESTION | Fail |
-| 2008-02-10 03:17 | 0.1715 | INSPECT | sensor_15 | RECIPE_ADJUSTMENT_SUGGESTION | Fail |
-| 2008-02-10 21:32 | 0.0375 | INSPECT | sensor_15 | RECIPE_ADJUSTMENT_SUGGESTION | Fail |
-| 2008-06-10 13:38 | 0.1438 | INSPECT | sensor_16 | RECIPE_ADJUSTMENT_SUGGESTION | Fail |
-| 2008-10-15 02:42 | 0.0107 | INSPECT | sensor_15 | RECIPE_ADJUSTMENT_SUGGESTION | Fail |
-| 2008-07-29 23:14 | 0.0161 | INSPECT | sensor_16 | RECIPE_ADJUSTMENT_SUGGESTION | **Pass (오탐)** |
-| 2008-07-29 08:23 | 0.0035 | PASS | – | MONITOR_ONLY | Fail (미탐) |
-| 2008-07-29 15:49 | 0.0016 | PASS | – | MONITOR_ONLY | Fail (미탐) |
-| 2008-07-29 18:08 | 0.0049 | PASS | – | MONITOR_ONLY | Fail (미탐) |
-| 2008-01-08 05:52 | 0.0025 | PASS | – | MONITOR_ONLY | Fail (미탐) |
-| 2008-07-08 11:40 | 0.0030 | PASS | – | MONITOR_ONLY | Fail (미탐) |
-| 2008-08-18 17:13 | 0.0051 | PASS | – | MONITOR_ONLY | Fail (미탐) |
-| 2008-02-10 09:10 | 0.0008 | PASS | – | MONITOR_ONLY | Fail (미탐) |
-| 2008-05-10 00:33 | 0.0058 | PASS | – | MONITOR_ONLY | Fail (미탐) |
-| 2008-05-10 15:35 | 0.0051 | PASS | – | MONITOR_ONLY | Fail (미탐) |
-| 2008-06-10 13:55 | 0.0039 | PASS | – | MONITOR_ONLY | Fail (미탐) |
-| ... 외 정상(Pass) 9건 | – | PASS | – | MONITOR_ONLY | Pass |
+## 10. Repository 구조
 
-> **불량 감지: 11/21건 (Recall 52.4%) · 정상 오탐: 1/10건** — 이 fold는 5-fold 평균(Recall 60.6%)보다 다소 낮게 나온 사례이며, fold별 변동성이 존재함을 보여줍니다. (5×5 Repeated Nested CV 결과는 7번 섹션 참고)
->
-> 전체 결과는 [`outputs/etch_agent_demo_results.csv`](outputs/etch_agent_demo_results.csv)에서 확인할 수 있습니다.
+```text
+secom-vmfdc-agent/
+├── main_pipeline.ipynb   # 데이터 분석, 검증, XAI·Agent PoC
+├── README.md
+└── LICENSE
+```
 
----
+## 11. 한계와 다음 단계
 
-## 7. 최종 결과 요약
+- 센서명이 익명화되어 있어 실제 공정 변수와의 매핑이 필요합니다.
+- 공개 소규모 데이터에 대한 결과이므로 실제 Fab 데이터에서 외부 검증이 필요합니다.
+- Precision이 낮아 엔지니어의 추가 검토 부담을 줄이기 위한 후속 개선이 필요합니다.
+- Cost Ratio와 운영 조건은 실제 미검출 비용·검사 Capacity를 반영해 다시 산정해야 합니다.
+- 생산 적용 전 Shadow Test, 공정 전문가 검토, 데이터·모델 모니터링 체계가 필요합니다.
 
-| 항목 | 결과 |
-|---|---|
-| 최종 채택 증강 기법 | SMOTE (통계적 검증 기반) |
-| Recall | 71.1% |
-| Precision | 11.6% |
-| AUC | 0.721 |
-| 검사량감소 (Cost Ratio 15:1 기준) | 58.4% |
-| 증강기법 간 통계 검정 | Wilcoxon signed-rank test, GMM+PCA의 Recall 열등성 확인 (p<0.05) |
-| 발견 및 제거한 Artifact 센서 | sensor_67 (반복검증으로 구조적 artifact 판정) |
+## 용어 안내
 
----
+기존 Notebook 일부에는 `VM`, `EtchProcessAgent` 같은 초기 실험 단계의 이름이 남아 있습니다. 본 프로젝트의 실제 범위는 **UCI SECOM 기반 불량 스크리닝 및 엔지니어 의사결정 지원 PoC**이며, 해당 명칭이 실제 Virtual Metrology 또는 Etch 제어 기능을 의미하지는 않습니다.
 
-## 8. 기술적 한계 및 추후 개선 방향
+## Reference
 
-- **Precision이 낮음 (11~13%)**: 위험으로 분류된 웨이퍼 중 실제 불량은 1/9 수준. 표본이 적은(불량 104개) SECOM 데이터의 본질적 한계로 보이며, 추가 공정 데이터/도메인 피처가 필요합니다.
-- **Recall 상한선 존재**: Cost Ratio를 아무리 높여도 Recall이 98.1%에서 정체되어, 현재 센서만으로 예측 불가능한 불량 유형이 일부 존재함을 시사합니다.
-- **Cost Ratio는 가정값**: 실제 운영 환경의 비용 데이터로 보정이 필요합니다.
-- **Action Control은 모킹(mocking) 단계**: 실제 MES/장비 API 연동은 구현하지 않았습니다.
-
----
-
-
-## 기술 스택
-
-`Python` `scikit-learn` `XGBoost` `imbalanced-learn (SMOTE)` `SHAP` `OpenAI API (GPT-4o-mini)` `pandas` `numpy` `scipy (Wilcoxon test)`
+- [UCI Machine Learning Repository: SECOM](https://archive.ics.uci.edu/dataset/179/secom)
+- [Project Repository](https://github.com/heejaelee712/secom-vmfdc-agent)
